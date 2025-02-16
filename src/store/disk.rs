@@ -2,6 +2,7 @@ use std::fs::{remove_file, File, OpenOptions};
 use std::io::{copy, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::ops;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use aligned_vec::avec_rt;
@@ -427,7 +428,7 @@ impl<E: Element> DiskStore<E> {
         let file = match OpenOptions::new()
             .write(true)
             .read(true)
-            // .custom_flags(libc::O_DIRECT)
+            .custom_flags(libc::O_DIRECT)
             .open(&data_path)
         {
             Ok(file) => file,
@@ -452,7 +453,7 @@ impl<E: Element> DiskStore<E> {
         }
 
         Ok(DiskStore {
-            len: size,
+            len: store_size / E::byte_len(),
             elem_len: E::byte_len(),
             _e: Default::default(),
             file,
