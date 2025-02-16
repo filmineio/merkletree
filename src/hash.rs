@@ -143,9 +143,7 @@ where
 
     /// Returns hash value for MT interior node (prefix 0x01).
     #[inline]
-    fn multi_node<'a>(&mut self, nodes: impl IntoIterator<Item = &'a T>, _height: usize) -> T 
-    where T: 'a
-    {
+    fn multi_node(&mut self, nodes: &[T], _height: usize) -> T {
         self.write(&[INTERIOR]);
         for node in nodes {
             self.write(node.as_ref());
