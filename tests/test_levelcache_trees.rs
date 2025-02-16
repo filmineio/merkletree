@@ -1,5 +1,3 @@
-#![cfg(not(tarpaulin_include))]
-
 /// LevelCacheStore trees have significant differences, so we use separate integration tests
 /// for their evaluation. Fortunately, only 'with-config' constructors (and couple of specific
 /// replica-constructors) can be used for instantiation of LevelCacheStore trees, so we group

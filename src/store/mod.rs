@@ -26,7 +26,7 @@ use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 pub const SMALL_TREE_BUILD: usize = 1024;
 
 // Number of nodes to process in parallel during the `build` stage.
-pub const BUILD_CHUNK_NODES: usize = 1024 * 4;
+pub const BUILD_CHUNK_NODES: usize = 1024 * 8;
 
 mod disk;
 mod level_cache;
@@ -198,7 +198,7 @@ impl StoreConfig {
 }
 
 /// Backing store of the merkle tree.
-pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
+pub trait Store<E: Element>: fmt::Debug + Send + Sync + Sized {
     /// Creates a new store which can store up to `size` elements.
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self>;
     fn new(size: usize) -> Result<Self>;

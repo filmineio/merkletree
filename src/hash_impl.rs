@@ -43,7 +43,7 @@ impl<H: Hasher, const N: usize> Hashable<H> for [u8; N] {
 
     #[allow(trivial_casts, unsafe_code)]
     fn hash_slice(data: &[[u8; N]], state: &mut H) {
-        let newlen = data.len() * mem::size_of::<[u8; N]>();
+        let newlen = data.len() * size_of::<[u8; N]>();
         let ptr = data.as_ptr() as *const u8;
         state.write(unsafe { slice::from_raw_parts(ptr, newlen) })
     }
@@ -142,7 +142,7 @@ impl<'a, H: Hasher, T: ?Sized + Hashable<H>> Hashable<H> for &'a mut T {
 impl<H: Hasher, T: ?Sized> Hashable<H> for *const T {
     #[allow(trivial_casts, unsafe_code)]
     fn hash(&self, state: &mut H) {
-        if mem::size_of::<Self>() == mem::size_of::<usize>() {
+        if size_of::<Self>() == size_of::<usize>() {
             // Thin pointer
             state.write_usize(*self as *const () as usize);
         } else {
@@ -157,7 +157,7 @@ impl<H: Hasher, T: ?Sized> Hashable<H> for *const T {
 impl<H: Hasher, T: ?Sized> Hashable<H> for *mut T {
     #[allow(trivial_casts, unsafe_code)]
     fn hash(&self, state: &mut H) {
-        if mem::size_of::<Self>() == mem::size_of::<usize>() {
+        if size_of::<Self>() == size_of::<usize>() {
             // Thin pointer
             state.write_usize(*self as *const () as usize);
         } else {

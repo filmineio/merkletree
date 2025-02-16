@@ -1,4 +1,3 @@
-#![cfg(not(tarpaulin_include))]
 pub mod common;
 
 use typenum::{Unsigned, U0, U2, U3, U4, U5, U8};

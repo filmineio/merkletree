@@ -1,17 +1,13 @@
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::{copy, Seek, SeekFrom};
-use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
 
+use aligned_vec::avec_rt;
 use anyhow::{Context, Result};
 use log::warn;
-use memmap2::MmapOptions;
 use positioned_io::{ReadAt, WriteAt};
-use rayon::iter::*;
-use rayon::prelude::*;
 use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
 
@@ -320,59 +316,44 @@ impl<E: Element> Store<E> for DiskStore<E> {
         width: usize,
         level: usize,
         read_start: usize,
-        write_start: usize,
+        mut write_start: usize,
     ) -> Result<()> {
-        // Safety: this operation is safe becase it's a limited
-        // writable region on the backing store managed by this type.
-        let mut mmap = unsafe {
-            let mut mmap_options = MmapOptions::new();
-            mmap_options
-                .offset((write_start * E::byte_len()) as u64)
-                .len(width * E::byte_len())
-                .map_mut(&self.file)
-        }?;
-
-        let data_lock = Arc::new(RwLock::new(self));
         let branches = U::to_usize();
-        let shift = log2_pow2(branches);
-        let write_chunk_width = (BUILD_CHUNK_NODES >> shift) * E::byte_len();
-
         ensure!(BUILD_CHUNK_NODES % branches == 0, "Invalid chunk size");
-        Vec::from_iter((read_start..read_start + width).step_by(BUILD_CHUNK_NODES))
-            .into_par_iter()
-            .zip(mmap.par_chunks_mut(write_chunk_width))
-            .try_for_each(|(chunk_index, write_mmap)| -> Result<()> {
-                let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
+        let mut read_buffer = avec_rt![[4096] | 0u8; BUILD_CHUNK_NODES * E::byte_len()];
+        let mut write_buffer = avec_rt![[4096] | 0u8; BUILD_CHUNK_NODES / branches * E::byte_len()];
+        let mut chunk_nodes = Vec::with_capacity(BUILD_CHUNK_NODES);
+        for chunk_index in (read_start..read_start + width).step_by(BUILD_CHUNK_NODES) {
+            self.file
+                .read_exact_at(chunk_index as u64 * E::byte_len() as u64, &mut read_buffer)?;
+            write_buffer.clear();
+            let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
 
-                let chunk_nodes = {
-                    // Read everything taking the lock once.
-                    data_lock
-                        .read()
-                        .expect("[process_layer] error occurred while thread blocking")
-                        .read_range(chunk_index..chunk_index + chunk_size)?
-                };
+            let hashed_nodes_as_bytes = read_buffer
+                .chunks(E::byte_len() * branches)
+                .map(|chunk| chunk.chunks(E::byte_len()).map(E::from_slice))
+                .fold(write_buffer, |mut acc, nodes| {
+                    chunk_nodes.clear();
+                    nodes.for_each(|node| chunk_nodes.push(node));
+                    let h = A::default().multi_node(&chunk_nodes, level);
+                    acc.extend_from_slice(h.as_ref());
+                    acc
+                });
 
-                let nodes_size = (chunk_nodes.len() / branches) * E::byte_len();
-                let hashed_nodes_as_bytes = chunk_nodes.chunks(branches).fold(
-                    Vec::with_capacity(nodes_size),
-                    |mut acc, nodes| {
-                        let h = A::default().multi_node(nodes, level);
-                        acc.extend_from_slice(h.as_ref());
-                        acc
-                    },
-                );
+            // Check that we correctly pre-allocated the space.
+            ensure!(
+                hashed_nodes_as_bytes.len() == chunk_size / branches * E::byte_len(),
+                "Invalid hashed node length"
+            );
 
-                // Check that we correctly pre-allocated the space.
-                let hashed_nodes_as_bytes_len = hashed_nodes_as_bytes.len();
-                ensure!(
-                    hashed_nodes_as_bytes.len() == chunk_size / branches * E::byte_len(),
-                    "Invalid hashed node length"
-                );
-
-                write_mmap[0..hashed_nodes_as_bytes_len].copy_from_slice(&hashed_nodes_as_bytes);
-
-                Ok(())
-            })
+            self.file.write_all_at(
+                write_start as u64 * E::byte_len() as u64,
+                &hashed_nodes_as_bytes,
+            )?;
+            write_buffer = hashed_nodes_as_bytes;
+            write_start += chunk_size;
+        }
+        Ok(())
     }
 
     // DiskStore specific merkle-tree build.
@@ -443,7 +424,12 @@ impl<E: Element> DiskStore<E> {
     pub fn new_from_disk_with_path<P: AsRef<Path>>(size: usize, data_path: P) -> Result<Self> {
         ensure!(data_path.as_ref().exists(), "[DiskStore] new_from_disk constructor can be used only for instantiating already existing storages");
 
-        let file = match OpenOptions::new().write(true).read(true).open(&data_path) {
+        let file = match OpenOptions::new()
+            .write(true)
+            .read(true)
+            // .custom_flags(libc::O_DIRECT)
+            .open(&data_path)
+        {
             Ok(file) => file,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -461,13 +447,9 @@ impl<E: Element> DiskStore<E> {
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
-        // Sanity check.
-        ensure!(
-            store_size == size * E::byte_len(),
-            "Invalid formatted file provided. Expected {} bytes, found {} bytes",
-            size * E::byte_len(),
-            store_size
-        );
+        if store_size != size * E::byte_len() {
+            file.set_len(size as u64 * E::byte_len() as u64)?;
+        }
 
         Ok(DiskStore {
             len: size,

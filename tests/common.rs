@@ -1,4 +1,3 @@
-#![cfg(not(tarpaulin_include))]
 use std::fmt;
 use std::hash::Hasher;
 use std::io::Write;

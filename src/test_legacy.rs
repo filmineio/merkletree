@@ -1,5 +1,4 @@
 #![cfg(test)]
-#![cfg(not(tarpaulin_include))]
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -1248,19 +1247,21 @@ impl<A: Algorithm<Item2>> Hashable<A> for Item2 {
     }
 }
 
+impl Algorithm<Item2> for DefaultHasher {
+    #[inline]
+    fn hash(&mut self) -> Item2 {
+        Item2(self.finish())
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        *self = DefaultHasher::default()
+    }
+}
+
 #[test]
 fn test_simple_tree() {
-    impl Algorithm<Item2> for DefaultHasher {
-        #[inline]
-        fn hash(&mut self) -> Item2 {
-            Item2(self.finish())
-        }
 
-        #[inline]
-        fn reset(&mut self) {
-            *self = DefaultHasher::default()
-        }
-    }
 
     let answer: Vec<Vec<u64>> = vec![
         vec![
