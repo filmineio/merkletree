@@ -331,7 +331,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
                 .read_exact_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
             write_buffer.clear();
 
-            let hashed_nodes_as_bytes = read_buffer
+            let mut hashed_nodes_as_bytes = read_buffer
                 .chunks(E::byte_len() * branches)
                 .map(|chunk| chunk.chunks(E::byte_len()).map(E::from_slice))
                 .fold(write_buffer, |mut acc, nodes| {
@@ -348,6 +348,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
                 "Invalid hashed node length"
             );
 
+            if hashed_nodes_as_bytes.len() % 4096 != 0 {
+                hashed_nodes_as_bytes.extend_from_slice(&[0u8; 4096][..hashed_nodes_as_bytes.len() % 4096]);
+            }
+
             self.file.write_all_at(
                 write_start as u64 * E::byte_len() as u64,
                 &hashed_nodes_as_bytes,
@@ -355,6 +359,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             write_buffer = hashed_nodes_as_bytes;
             write_start += chunk_size;
         }
+        self.file.set_len(self.store_size as u64)?;
         Ok(())
     }
 
@@ -459,7 +464,7 @@ impl<E: Element> DiskStore<E> {
             _e: Default::default(),
             file,
             loaded_from_disk: true,
-            store_size,
+            store_size: size * E::byte_len(),
         })
     }
 
