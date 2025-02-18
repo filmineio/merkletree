@@ -325,10 +325,11 @@ impl<E: Element> Store<E> for DiskStore<E> {
         let mut write_buffer = avec_rt![[4096] | 0u8; BUILD_CHUNK_NODES / branches * E::byte_len()];
         let mut chunk_nodes = Vec::with_capacity(BUILD_CHUNK_NODES);
         for chunk_index in (read_start..read_start + width).step_by(BUILD_CHUNK_NODES) {
-            self.file
-                .read_exact_at(chunk_index as u64 * E::byte_len() as u64, &mut read_buffer)?;
-            write_buffer.clear();
             let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
+            let read_buffer = &mut read_buffer[..chunk_size * E::byte_len()];
+            self.file
+                .read_exact_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
+            write_buffer.clear();
 
             let hashed_nodes_as_bytes = read_buffer
                 .chunks(E::byte_len() * branches)
