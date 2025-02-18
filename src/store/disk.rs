@@ -326,12 +326,12 @@ impl<E: Element> Store<E> for DiskStore<E> {
         let mut chunk_nodes = Vec::with_capacity(BUILD_CHUNK_NODES);
         for chunk_index in (read_start..read_start + width).step_by(BUILD_CHUNK_NODES) {
             let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
-            let read_buffer = &mut read_buffer[..chunk_size * E::byte_len()];
+            let read_buffer = &mut read_buffer[..std::cmp::max(4096, chunk_size * E::byte_len())];
             self.file
                 .read_exact_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
             write_buffer.clear();
 
-            let mut hashed_nodes_as_bytes = read_buffer
+            let mut hashed_nodes_as_bytes = read_buffer[..chunk_size * E::byte_len()]
                 .chunks(E::byte_len() * branches)
                 .map(|chunk| chunk.chunks(E::byte_len()).map(E::from_slice))
                 .fold(write_buffer, |mut acc, nodes| {
@@ -349,7 +349,8 @@ impl<E: Element> Store<E> for DiskStore<E> {
             );
 
             if hashed_nodes_as_bytes.len() % 4096 != 0 {
-                hashed_nodes_as_bytes.extend_from_slice(&[0u8; 4096][..hashed_nodes_as_bytes.len() % 4096]);
+                hashed_nodes_as_bytes
+                    .extend_from_slice(&[0u8; 4096][..hashed_nodes_as_bytes.len() % 4096]);
             }
 
             self.file.write_all_at(
