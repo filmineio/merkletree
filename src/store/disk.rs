@@ -328,7 +328,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
             let read_buffer = &mut read_buffer[..std::cmp::max(4096, chunk_size * E::byte_len())];
             self.file
-                .read_exact_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
+                .read_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
             write_buffer.clear();
 
             let mut hashed_nodes_as_bytes = read_buffer[..chunk_size * E::byte_len()]
