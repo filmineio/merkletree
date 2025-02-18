@@ -350,7 +350,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
 
             if hashed_nodes_as_bytes.len() % 4096 != 0 {
                 hashed_nodes_as_bytes
-                    .extend_from_slice(&[0u8; 4096][..hashed_nodes_as_bytes.len() % 4096]);
+                    .extend_from_slice(&[0u8; 4096][..4096 - hashed_nodes_as_bytes.len() % 4096]);
             }
 
             self.file.write_all_at(
