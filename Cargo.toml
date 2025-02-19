@@ -47,3 +47,7 @@ walkdir = "2.3.2"
 name = "merkle"
 path = "benches/merkle.rs"
 harness = false
+
+[features]
+default = []
+direct-build = []
