@@ -3,13 +3,12 @@ use std::io::{copy, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::ops;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aligned_vec::avec_rt;
 use anyhow::{Context, Result};
 use log::warn;
 use positioned_io::{ReadAt, WriteAt};
-use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
 
 use crate::hash::Algorithm;
@@ -28,6 +27,7 @@ pub struct DiskStore<E: Element> {
     elem_len: usize,
     _e: PhantomData<E>,
     file: File,
+    path: PathBuf,
 
     // This flag is useful only immediate after instantiation, which
     // is false if the store was newly initialized and true if the
@@ -54,7 +54,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(&data_path)?;
 
         let store_size = E::byte_len() * size;
         file.set_len(store_size as u64)?;
@@ -66,12 +66,15 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path: data_path,
         })
     }
 
     fn new(size: usize) -> Result<Self> {
         let store_size = E::byte_len() * size;
-        let file = tempfile()?;
+        let file = tempfile::NamedTempFile::new()?;
+        let path = file.path().to_path_buf();
+        let file = file.into_file();
         file.set_len(store_size as u64)?;
 
         Ok(DiskStore {
@@ -81,6 +84,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path,
         })
     }
 
@@ -394,6 +398,12 @@ impl<E: Element> Store<E> for DiskStore<E> {
 
         let shift = log2_pow2(branches);
 
+        self.file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(&self.path)?;
+
         while width > 1 {
             // Start reading at the beginning of the current level, and writing the next
             // level immediate after.  `level_node_index` keeps track of the current read
@@ -418,6 +428,11 @@ impl<E: Element> Store<E> for DiskStore<E> {
             self.set_len(Store::len(self) + width);
         }
 
+        self.file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .open(&self.path)?;
+
         // Ensure every element is accounted for.
         ensure!(
             Store::len(self) == get_merkle_tree_len(leafs, branches)?,
@@ -440,7 +455,6 @@ impl<E: Element> DiskStore<E> {
         let file = match OpenOptions::new()
             .write(true)
             .read(true)
-            .custom_flags(libc::O_DIRECT)
             .open(&data_path)
         {
             Ok(file) => file,
@@ -471,6 +485,7 @@ impl<E: Element> DiskStore<E> {
             file,
             loaded_from_disk: true,
             store_size: size * E::byte_len(),
+            path: data_path.as_ref().to_path_buf(),
         })
     }
 
