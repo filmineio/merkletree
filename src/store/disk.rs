@@ -326,38 +326,43 @@ impl<E: Element> Store<E> for DiskStore<E> {
         let mut chunk_nodes = Vec::with_capacity(BUILD_CHUNK_NODES);
         for chunk_index in (read_start..read_start + width).step_by(BUILD_CHUNK_NODES) {
             let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
+            let read_offset = chunk_index as u64 * E::byte_len() as u64;
+            let write_offset = write_start as u64 * E::byte_len() as u64;
+            let read_block_offset = (read_offset % 4096) as usize;
+            let write_block_offset = (write_offset % 4096) as usize;
+
             let read_buffer = &mut read_buffer[..std::cmp::max(4096, chunk_size * E::byte_len())];
             self.file
-                .read_at(chunk_index as u64 * E::byte_len() as u64, read_buffer)?;
+                .read_at(read_offset - read_block_offset as u64, read_buffer)?;
             write_buffer.clear();
+            if write_block_offset != 0 {
+                ensure!(
+                    write_offset / 4096 == read_offset / 4096,
+                    "Invalid block offset"
+                );
+                write_buffer.extend_from_slice(&read_buffer[..write_block_offset]);
+            }
 
-            let mut hashed_nodes_as_bytes = read_buffer[..chunk_size * E::byte_len()]
+            read_buffer[read_block_offset..read_block_offset + chunk_size * E::byte_len()]
                 .chunks(E::byte_len() * branches)
                 .map(|chunk| chunk.chunks(E::byte_len()).map(E::from_slice))
-                .fold(write_buffer, |mut acc, nodes| {
+                .for_each(|nodes| {
                     chunk_nodes.clear();
                     nodes.for_each(|node| chunk_nodes.push(node));
                     let h = A::default().multi_node(&chunk_nodes, level);
-                    acc.extend_from_slice(h.as_ref());
-                    acc
+                    write_buffer.extend_from_slice(h.as_ref());
                 });
 
             // Check that we correctly pre-allocated the space.
             ensure!(
-                hashed_nodes_as_bytes.len() == chunk_size / branches * E::byte_len(),
+                write_buffer.len() == write_block_offset + chunk_size / branches * E::byte_len(),
                 "Invalid hashed node length"
             );
 
-            if hashed_nodes_as_bytes.len() % 4096 != 0 {
-                hashed_nodes_as_bytes
-                    .extend_from_slice(&[0u8; 4096][..4096 - hashed_nodes_as_bytes.len() % 4096]);
-            }
+            write_buffer.resize(std::cmp::max(4096, write_buffer.len()), 0);
 
-            self.file.write_all_at(
-                write_start as u64 * E::byte_len() as u64,
-                &hashed_nodes_as_bytes,
-            )?;
-            write_buffer = hashed_nodes_as_bytes;
+            self.file
+                .write_all_at(write_offset - write_block_offset as u64, &write_buffer)?;
             write_start += chunk_size;
         }
         self.file.set_len(self.store_size as u64)?;
