@@ -26,7 +26,7 @@ use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 pub const SMALL_TREE_BUILD: usize = 1024;
 
 // Number of nodes to process in parallel during the `build` stage.
-pub const BUILD_CHUNK_NODES: usize = 1024 * 8;
+pub const BUILD_CHUNK_NODES: usize = 1024 * 4;
 
 mod disk;
 mod level_cache;

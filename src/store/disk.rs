@@ -80,14 +80,15 @@ impl<E: Element> DiskStore<E> {
             let read_block_offset = (read_offset % Self::DIRECT_IO_BLOCK as u64) as usize;
             let write_block_offset = (write_offset % Self::DIRECT_IO_BLOCK as u64) as usize;
 
-            let read_buffer =
-                &mut read_buffer[..std::cmp::max(Self::DIRECT_IO_BLOCK, chunk_size * E::byte_len())];
+            let read_buffer = &mut read_buffer
+                [..std::cmp::max(Self::DIRECT_IO_BLOCK, chunk_size * E::byte_len())];
             self.file
                 .read_at(read_offset - read_block_offset as u64, read_buffer)?;
             write_buffer.clear();
             if write_block_offset != 0 {
                 ensure!(
-                    write_offset / Self::DIRECT_IO_BLOCK as u64 == read_offset / Self::DIRECT_IO_BLOCK as u64,
+                    write_offset / Self::DIRECT_IO_BLOCK as u64
+                        == read_offset / Self::DIRECT_IO_BLOCK as u64,
                     "Invalid block offset"
                 );
                 write_buffer.extend_from_slice(&read_buffer[..write_block_offset]);
