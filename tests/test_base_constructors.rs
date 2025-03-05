@@ -539,7 +539,7 @@ fn test_large_base_trees() {
     );
 }
 
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(feature = "direct-build", test))]
 fn test_direct_build() {
     let data = vec![1u8; SMALL_TREE_BUILD * TestItem::byte_len()];
     let mut store = DiskStore::<TestItem>::new_from_slice(SMALL_TREE_BUILD, &data).unwrap();
