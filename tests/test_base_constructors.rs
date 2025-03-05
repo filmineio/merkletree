@@ -543,7 +543,8 @@ fn test_large_base_trees() {
 #[test]
 fn test_direct_build() {
     let data = vec![1u8; SMALL_TREE_BUILD * TestItem::byte_len()];
-    let mut store = DiskStore::<TestItem>::new_from_slice(SMALL_TREE_BUILD, &data).unwrap();
+    let size = get_merkle_tree_len_generic::<U2, U0, U0>(SMALL_TREE_BUILD).unwrap();
+    let mut store = DiskStore::<TestItem>::new_from_slice(size, &data).unwrap();
     let root = store
         .build::<TestSha256Hasher, U2>(
             SMALL_TREE_BUILD,
@@ -559,13 +560,8 @@ fn test_direct_build() {
     let config = StoreConfig::new(temp_dir.into_path(), "test_direct_build".to_string(), 0);
     let file_path = StoreConfig::data_path(&config.path, &config.id);
     std::fs::write(file_path, &data).unwrap();
-    let mut store = DiskStore::<TestItem>::new_with_config(
-        get_merkle_tree_len_generic::<U2, U0, U0>(SMALL_TREE_BUILD).unwrap(),
-        2,
-        config,
-    )
-    .unwrap();
-    store.set_direct_build_chunk_size(256);
+    let mut store = DiskStore::<TestItem>::new_with_config(size, 2, config).unwrap();
+    store.set_direct_build_chunk_size(4096);
     let root2 = store
         .build::<TestSha256Hasher, U2>(
             SMALL_TREE_BUILD,
