@@ -50,6 +50,7 @@ pub struct DiskStore<E: Element> {
 
 #[cfg(feature = "direct-build")]
 impl<E: Element> DiskStore<E> {
+    const BINARY_TREE_BRANCHES: usize = 2;
     const DIRECT_IO_BLOCK: usize = 4096;
     fn process_layer_direct_binary<A: Algorithm<E>>(
         &mut self,
@@ -67,7 +68,7 @@ impl<E: Element> DiskStore<E> {
                 .open(&self._path)?;
         }
 
-        let branches = 2;
+        let branches = Self::BINARY_TREE_BRANCHES;
         ensure!(chunk_size % branches == 0, "Invalid chunk size");
         let mut read_buffer = avec_rt![[Self::DIRECT_IO_BLOCK] | 0u8; chunk_size * E::byte_len()];
         let mut write_buffer =
@@ -418,7 +419,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
         write_start: usize,
     ) -> Result<()> {
         #[cfg(feature = "direct-build")]
-        if U::to_usize() == 2 && self._direct_build_chunk_size.is_some() {
+        if U::to_usize() == Self::BINARY_TREE_BRANCHES && self._direct_build_chunk_size.is_some() {
             return self.process_layer_direct_binary::<A>(
                 width,
                 level,
