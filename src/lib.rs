@@ -78,7 +78,6 @@
     unstable_features,
     unused_import_braces
 )]
-#![cfg_attr(feature = "nightly", allow(unstable_features))]
 
 #[macro_use]
 extern crate anyhow;

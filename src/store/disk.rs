@@ -3,16 +3,19 @@ use std::io::{copy, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
-use std::path::Path;
+#[cfg(feature = "direct-build")]
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "direct-build")]
+use aligned_vec::avec_rt;
 use anyhow::{Context, Result};
 use log::warn;
 use memmap2::MmapOptions;
 use positioned_io::{ReadAt, WriteAt};
-use rayon::iter::*;
-use rayon::prelude::*;
-use tempfile::tempfile;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 use typenum::marker_traits::Unsigned;
 
 use crate::hash::Algorithm;
@@ -31,6 +34,8 @@ pub struct DiskStore<E: Element> {
     elem_len: usize,
     _e: PhantomData<E>,
     file: File,
+    _path: PathBuf,
+    _direct_build_chunk_size: Option<usize>,
 
     // This flag is useful only immediate after instantiation, which
     // is false if the store was newly initialized and true if the
@@ -41,6 +46,91 @@ pub struct DiskStore<E: Element> {
     // Not to be confused with `len`, this saves the total size of the `store`
     // in bytes and the other one keeps track of used `E` slots in the `DiskStore`.
     store_size: usize,
+}
+
+#[cfg(feature = "direct-build")]
+impl<E: Element> DiskStore<E> {
+    const BINARY_TREE_BRANCHES: usize = 2;
+    const DIRECT_IO_BLOCK: usize = 4096;
+    fn process_layer_direct_binary<A: Algorithm<E>>(
+        &mut self,
+        width: usize,
+        level: usize,
+        read_start: usize,
+        mut write_start: usize,
+        chunk_size: usize,
+    ) -> Result<()> {
+        if read_start == 0 {
+            self.file = OpenOptions::new()
+                .write(true)
+                .read(true)
+                .custom_flags(libc::O_DIRECT)
+                .open(&self._path)?;
+        }
+
+        let branches = Self::BINARY_TREE_BRANCHES;
+        ensure!(chunk_size % branches == 0, "Invalid chunk size");
+        let mut read_buffer = avec_rt![[Self::DIRECT_IO_BLOCK] | 0u8; chunk_size * E::byte_len()];
+        let mut write_buffer =
+            avec_rt![[Self::DIRECT_IO_BLOCK] | 0u8; chunk_size / branches * E::byte_len()];
+        let mut chunk_nodes = Vec::with_capacity(chunk_size);
+        for chunk_index in (read_start..read_start + width).step_by(chunk_size) {
+            let chunk_size = std::cmp::min(chunk_size, read_start + width - chunk_index);
+            let read_offset = chunk_index as u64 * E::byte_len() as u64;
+            let write_offset = write_start as u64 * E::byte_len() as u64;
+            let read_block_offset = (read_offset % Self::DIRECT_IO_BLOCK as u64) as usize;
+            let write_block_offset = (write_offset % Self::DIRECT_IO_BLOCK as u64) as usize;
+
+            let read_buffer = &mut read_buffer
+                [..std::cmp::max(Self::DIRECT_IO_BLOCK, chunk_size * E::byte_len())];
+            self.file
+                .read_at(read_offset - read_block_offset as u64, read_buffer)?;
+            write_buffer.clear();
+            if write_block_offset != 0 {
+                ensure!(
+                    write_offset / Self::DIRECT_IO_BLOCK as u64
+                        == read_offset / Self::DIRECT_IO_BLOCK as u64,
+                    "Invalid block offset"
+                );
+                write_buffer.extend_from_slice(&read_buffer[..write_block_offset]);
+            }
+
+            read_buffer[read_block_offset..read_block_offset + chunk_size * E::byte_len()]
+                .chunks(E::byte_len() * branches)
+                .map(|chunk| chunk.chunks(E::byte_len()).map(E::from_slice))
+                .for_each(|nodes| {
+                    chunk_nodes.clear();
+                    nodes.for_each(|node| chunk_nodes.push(node));
+                    let h = A::default().multi_node(&chunk_nodes, level);
+                    write_buffer.extend_from_slice(h.as_ref());
+                });
+
+            // Check that we correctly pre-allocated the space.
+            ensure!(
+                write_buffer.len() == write_block_offset + chunk_size / branches * E::byte_len(),
+                "Invalid hashed node length"
+            );
+
+            write_buffer.resize(std::cmp::max(Self::DIRECT_IO_BLOCK, write_buffer.len()), 0);
+
+            self.file
+                .write_all_at(write_offset - write_block_offset as u64, &write_buffer)?;
+            write_start += chunk_size;
+        }
+
+        if width == branches {
+            self.file = OpenOptions::new()
+                .write(true)
+                .read(true)
+                .open(&self._path)?;
+            self.file.set_len(self.store_size as u64)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_direct_build_chunk_size(&mut self, chunk_size: usize) {
+        self._direct_build_chunk_size = Some(chunk_size);
+    }
 }
 
 impl<E: Element> Store<E> for DiskStore<E> {
@@ -57,7 +147,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(&data_path)?;
 
         let store_size = E::byte_len() * size;
         file.set_len(store_size as u64)?;
@@ -69,12 +159,16 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            _path: data_path,
+            _direct_build_chunk_size: None,
         })
     }
 
     fn new(size: usize) -> Result<Self> {
         let store_size = E::byte_len() * size;
-        let file = tempfile()?;
+        let file = tempfile::NamedTempFile::new()?;
+        let path = file.path().to_path_buf();
+        let file = file.into_file();
         file.set_len(store_size as u64)?;
 
         Ok(DiskStore {
@@ -84,6 +178,8 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            _path: path,
+            _direct_build_chunk_size: None,
         })
     }
 
@@ -322,6 +418,17 @@ impl<E: Element> Store<E> for DiskStore<E> {
         read_start: usize,
         write_start: usize,
     ) -> Result<()> {
+        #[cfg(feature = "direct-build")]
+        if U::to_usize() == Self::BINARY_TREE_BRANCHES && self._direct_build_chunk_size.is_some() {
+            return self.process_layer_direct_binary::<A>(
+                width,
+                level,
+                read_start,
+                write_start,
+                self._direct_build_chunk_size.unwrap(),
+            );
+        }
+
         // Safety: this operation is safe becase it's a limited
         // writable region on the backing store managed by this type.
         let mut mmap = unsafe {
@@ -461,21 +568,19 @@ impl<E: Element> DiskStore<E> {
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
-        // Sanity check.
-        ensure!(
-            store_size == size * E::byte_len(),
-            "Invalid formatted file provided. Expected {} bytes, found {} bytes",
-            size * E::byte_len(),
-            store_size
-        );
+        if store_size != size * E::byte_len() {
+            file.set_len(size as u64 * E::byte_len() as u64)?;
+        }
 
         Ok(DiskStore {
-            len: size,
+            len: store_size / E::byte_len(),
             elem_len: E::byte_len(),
             _e: Default::default(),
             file,
             loaded_from_disk: true,
-            store_size,
+            store_size: size * E::byte_len(),
+            _path: data_path.as_ref().to_path_buf(),
+            _direct_build_chunk_size: None,
         })
     }
 
