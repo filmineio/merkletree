@@ -115,7 +115,7 @@ impl<E: Element> DiskStore<E> {
 
             self.file
                 .write_all_at(write_offset - write_block_offset as u64, &write_buffer)?;
-            write_start += chunk_size;
+            write_start += chunk_size / branches;
         }
 
         if width == branches {
